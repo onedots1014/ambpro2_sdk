@@ -135,7 +135,8 @@ static nn_data_param_t roi_nn = {
 			.xmax = NN_WIDTH,
 			.ymax = NN_HEIGHT,
 		}
-	}
+	},
+	.codec_type = AV_CODEC_ID_RGB888
 };
 
 static int gkvsPause = 1;
@@ -205,26 +206,9 @@ static void kvs_control_task(void *param)
 //--------------------------------------------
 // Draw Rect
 //--------------------------------------------
-#include "nn_osd_draw.h"
+#include "osd_render.h"
 #define LIMIT(x, lower, upper) if(x<lower) x=lower; else if(x>upper) x=upper;
 
-static nn_osd_draw_obj_t nn_object;
-
-static nn_osd_rect_t osd_rect = {
-	.line_width = 3,
-	.color = {
-		.r = 255,
-		.g = 255,
-		.b = 255
-	}
-};
-static nn_osd_text_t osd_text = {
-	.color = {
-		.r = 0,
-		.g = 255,
-		.b = 255
-	}
-};
 static int check_in_list(int class_indx)
 {
 	for (int i = 0; i < desired_class_num; i++) {
@@ -238,7 +222,11 @@ static int check_in_list(int class_indx)
 static void nn_set_object(void *p, void *img_param)
 {
 	int i = 0;
-	objdetect_res_t *res = (objdetect_res_t *)p;
+	vipnn_out_buf_t *out = (vipnn_out_buf_t *)p;
+	objdetect_res_t *res = (objdetect_res_t *)&out->res[0];
+
+	int obj_num = out->res_cnt;
+
 	nn_data_param_t *im = (nn_data_param_t *)img_param;
 
 	if (!p || !img_param)	{
@@ -266,66 +254,38 @@ static void nn_set_object(void *p, void *img_param)
 		roi_y = (int)(im->img.roi.ymin * ratio_h);
 	}
 
-	//printf("object num = %d\r\n", res->obj_num);
-	if (res->obj_num > 0) {
-		nn_object.obj_num = 0;
-		for (i = 0; i < res->obj_num; i++) {
+	//printf("object num = %d\r\n", obj_num);
+	canvas_create_bitmap(V1_CHANNEL, 0, RTS_OSD2_BLK_FMT_1BPP);
+	if (obj_num > 0) {
+		for (i = 0; i < obj_num; i++) {
 			int obj_class = (int)res->result[6 * i ];
-			if (nn_object.obj_num == OSD_OBJ_MAX_NUM) {
-				break;
-			}
-			//printf("obj_class = %d\r\n",obj_class);
-
 			int class_id = check_in_list(obj_class); //show class in desired_class_list
 			//int class_id = obj_class; //coco label
 			if (class_id != -1) {
-				int ind = nn_object.obj_num;
-				nn_object.rect[ind].ymin = (int)(res->result[6 * i + 3] * roi_h) + roi_y;
-				LIMIT(nn_object.rect[ind].ymin, 0, im_h - 1)
-
-				nn_object.rect[ind].xmin = (int)(res->result[6 * i + 2] * roi_w) + roi_x;
-				LIMIT(nn_object.rect[ind].xmin, 0, im_w - 1)
-
-				nn_object.rect[ind].ymax = (int)(res->result[6 * i + 5] * roi_h) + roi_y;
-				LIMIT(nn_object.rect[ind].ymax, 0, im_h - 1)
-
-				nn_object.rect[ind].xmax = (int)(res->result[6 * i + 4] * roi_w) + roi_x;
-				LIMIT(nn_object.rect[ind].xmax, 0, im_w - 1)
-
-				nn_object.class[ind] = class_id;
-				nn_object.score[ind] = (int)(res->result[6 * i + 1 ] * 100);
-				nn_object.obj_num++;
-				// printf("%d,c%d:%d %d %d %d\n\r", i, nn_object.class[ind], nn_object.rect[ind].xmin, nn_object.rect[ind].ymin, nn_object.rect[ind].xmax,
-				// nn_object.rect[ind].ymax);
+				int xmin = (int)(res[i].result[2] * roi_w) + roi_x;
+				int ymin = (int)(res[i].result[3] * roi_h) + roi_y;
+				int xmax = (int)(res[i].result[4] * roi_w) + roi_x;
+				int ymax = (int)(res[i].result[5] * roi_h) + roi_y;
+				LIMIT(xmin, 0, im_w)
+				LIMIT(xmax, 0, im_w)
+				LIMIT(ymin, 0, im_h)
+				LIMIT(ymax, 0, im_h)
+				printf("%d,c%d:%d %d %d %d\n\r", i, class_id, xmin, ymin, xmax, ymax);
+				canvas_set_rect(V1_CHANNEL, 0, xmin, ymin, xmax, ymax, 3, COLOR_WHITE);
+				char text_str[20];
+				snprintf(text_str, sizeof(text_str), "%s %d", coco_name_get_by_id(class_id), (int)(res[i].result[1] * 100));
+				canvas_set_text(V1_CHANNEL, 0, xmin, ymin - 32, text_str, COLOR_CYAN);
 
 				if (g_kvs_triggered == 0) {
 					g_kvs_triggered = 1;
 				}
 			}
 		}
-	} else {
-		nn_object.obj_num = 0;
 	}
-
 	if (gkvsPause) {
 		return;
 	}
-
-	int nn_osd_ready2draw = nn_osd_get_status();
-	if (nn_osd_ready2draw == 1) {
-		for (i = 0; i < OSD_OBJ_MAX_NUM; i++) {
-			if (i < nn_object.obj_num) {
-				snprintf(osd_text.text_str, sizeof(osd_text.text_str), "%s %d", tag[nn_object.class[i]], nn_object.score[i]);
-				memcpy(&osd_rect.rect, &nn_object.rect[i], sizeof(nn_rect_t));
-				nn_osd_set_rect_with_text(i, V1_CHANNEL, &osd_text, &osd_rect);
-			} else {
-				nn_osd_clear_bitmap(i, V1_CHANNEL);
-			}
-			//printf("num=%d  %d, %d, %d, %d.\r\n", g_results.num, g_results.obj[i].left, g_results.obj[i].right, g_results.obj[i].top, g_results.obj[i].bottom);
-		}
-		nn_osd_update();
-	}
-
+	canvas_update(V1_CHANNEL, 0, 1);
 }
 
 #include "wifi_conf.h"
@@ -360,7 +320,7 @@ void example_kvs_producer_with_object_detection_thread(void *param)
 	int voe_heap_size = video_voe_presetting(1, V1_WIDTH, V1_HEIGHT, V1_BPS, 0,
 						0, 0, 0, 0, 0,
 						0, 0, 0, 0, 0,
-						0, 0, 0);
+						1, NN_WIDTH, NN_HEIGHT);
 
 	printf("\r\n voe heap size = %d\r\n", voe_heap_size);
 
@@ -444,7 +404,11 @@ void example_kvs_producer_with_object_detection_thread(void *param)
 	mm_module_ctrl(video_rgb_ctx, CMD_VIDEO_YUV, 2);
 	printf("siso_video_vipnn started\n\r");
 
-	nn_osd_start(1, V1_WIDTH, V1_HEIGHT, 0, 0, 0, 0, 0, 0, 16, 32);
+	int ch_enable[3] = {1, 0, 0};
+	int char_resize_w[3] = {16, 0, 0}, char_resize_h[3] = {32, 0, 0};
+	int ch_width[3] = {V1_WIDTH, 0, 0}, ch_height[3] = {V1_HEIGHT, 0, 0};
+	osd_render_dev_init(ch_enable, char_resize_w, char_resize_h);
+	osd_render_task_start(ch_enable, ch_width, ch_height);
 
 example_kvs_producer_with_object_detection:
 

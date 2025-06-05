@@ -208,7 +208,7 @@ static int vipnn_handle(void *p, void *input, void *output)
 		CHK_NN((status = vip_run_network(ctx->network)) == VIP_SUCCESS);
 #endif
 		NN_MEASURE_STOP(0);
-		NN_MEASURE_PRINT(0);
+		// NN_MEASURE_PRINT(0);
 
 		rtw_mutex_put(&nn_mutex);
 

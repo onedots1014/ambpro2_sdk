@@ -7,6 +7,6 @@
 
 void app_example(void)
 {
-	example_kvs_producer_mmf();
-	//example_kvs_producer_with_object_detection();
+	//example_kvs_producer_mmf();
+	example_kvs_producer_with_object_detection();
 }
